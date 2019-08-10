@@ -4,7 +4,6 @@ import scipy.sparse as sps
 import scipy.sparse.linalg
 from scipy.optimize import lsq_linear
 import scipy.linalg as sla
-import numpy as np
 import matplotlib.pyplot as plt
 from itertools import product
 from scipy.optimize import newton, root_scalar
@@ -66,29 +65,6 @@ def sqdist(X, Y):
 # Main setup, defining the node set, fidelity nodes, ground truth u and observations y, and corresponding
 # B and H matrices
 
-def other_setup(Ns=[100,100,100],num_in_each=5):
-    N = sum(Ns)
-
-    # begin with ground truth, u
-    fid = np.zeros(N, dtype='int')
-    idx = 0
-    for l in range(len(Ns)):
-        fid[idx:idx+num_in_each] = 1
-        idx += Ns[l]
-
-    B = sp.sparse.diags(fid, format='lil')
-    labeled = np.nonzero(fid)[0]
-
-
-    ground_truth = {i:1. if i <= Ns[0] else -1. for i in range(N)}
-
-    return B, labeled, ground_truth
-
-def compute_laplacian(W):
-    D = sp.sparse.diags(np.sum(W, axis=0).getA().flatten())
-    L = D - W
-    return L, D.diagonal()
-
 
 def get_eig_Lnorm(W):
     L_sym = csgraph.laplacian(W, normed=True)
@@ -142,79 +118,6 @@ def calc_risk(k, m, C, y, lab, unlab, m_probs, gamma2):
     return risk
 
 
-
-
-############## Active Learning Functions for Gaussian Clusters #######
-
-def calc_orig(v, w, B, Ns, labeled, tau, alpha, gamma2):
-    N = sum(Ns)
-    sup1 = labeled[labeled < Ns[0]]
-    sup2 = labeled[labeled >= Ns[0]]
-    y = np.zeros(N)  # this will already be in the expanded size, as if (H^Ty)
-    y[sup1] = 1.
-    y[sup2] = -1.
-
-    d = (tau ** (2 * alpha)) * np.power(w + tau**2., -alpha)     # diagonalization of C_t,e
-    # prior_inv : C_{tau,eps}^{-1}, where
-    # C_{tau, eps}^{-1} = tau^{-2alpha}(L + tau^2 I)^alpha
-    prior_inv = v.dot(sp.sparse.diags([1./thing for thing in d], format='lil').dot(v.T))
-    # B/gamma^2
-    B_over_gamma2 = B / (gamma2)
-    # post_inv  : (B/gamma^2 + C_{tau,\eps}^{-1})^{-1}
-    post_inv  = prior_inv + B_over_gamma2
-    C = post_inv.I
-    m = (1./gamma2)*C.dot(y).flatten()
-
-    return m, C, y
-
-
-
-def run_next(m, C, y, lab, unlab, ground_truth, gamma2):
-    risks = []
-    m_probs = get_probs(m)
-    for j in unlab:
-        risk_j = calc_risk(j, m, C, y, lab, unlab, m_probs.copy(), gamma2)
-        heappush(risks, (risk_j, j))
-
-    k_next_risk, k_next = heappop(risks)
-    # Ask "the oracle" for k_next's value, known from ground truth in Ns
-    y_k_next = ground_truth[k_next]
-
-    m_next, C_next = calc_next_C_and_m(m, C, y, lab, k_next, y_k_next, gamma2)
-    y_next = y.copy()
-    y_next[k_next] = y_k_next
-    lab = np.array(list(lab)+ [k_next])
-    unlab.remove(k_next)
-
-    return k_next, m_next, C_next, y_next, lab, unlab
-
-
-
-
-def calc_stats(m, labeled, Ns=[100,100], _print=False):
-    stats = {}
-    N = sum(Ns)
-    m1 = np.where(m >= 0)[1]
-    m2 = np.where(m < 0)[1]
-    sup1 = labeled[labeled < Ns[0]]
-    sup2 = labeled[labeled >= Ns[0]]
-    corr1 = list(set(m1).intersection(set(range(0,Ns[0]))))
-    incorr1 = list(set(m2).intersection(set(range(0,Ns[0]))))
-    corr2 = list(set(m2).intersection(set(range(Ns[0],N))))
-    incorr2 = list(set(m1).intersection(set(range(Ns[0],N))))
-
-    stats['corr1'] = corr1
-    stats['corr2'] = corr2
-    stats['sup1'] = sup1
-    stats['sup2'] = sup2
-    stats['incorr1'] = incorr1
-    stats['incorr2'] = incorr2
-
-    error = ((len(incorr1) + len(incorr2))/N )
-    if _print:
-        print('Error = %f' % error )
-
-    return error, stats
 
 
 
@@ -285,13 +188,31 @@ def calc_orig2(v, w, B, fid, tau, alpha, gamma2):
 
     return m, C, y
 
+def calc_orig2_new(v, w, B, fid, labeled, unlabeled, tau, alpha, gamma2):
+    N = v.shape[0]
+    y = np.zeros(N)  # this will already be in the expanded size, as if (H^Ty)
+    y[fid[1]] = 1.
+    y[fid[-1]] = -1.
+
+    w_inv = (tau ** (2 * alpha)) * np.power(w + tau**2., -alpha)     # diagonalization of C_t,e
+    C_tau = v.dot((v*w_inv).T)
+    C_ll = C_tau[np.ix_(labeled, labeled)]
+    C_all_l = C_tau[:,labeled]
+    C_ll[np.diag_indices(N_prime)] += gamma2  # directly changing C_ll
+    A_inv = sla.inv(C_ll)
+    Block1 = C_all_l.dot(A_inv)
+    C = C_tau - Block1.dot(C_all_l.T)
+    m = Block1.dot(y[labeled])
+
+    return m, C, y
 
 
 def run_next2(m, C, y, lab, unlab, fid, ground_truth, gamma2):
     tic = time.clock()
     risks = []
+    m_probs = get_probs(m)
     for j in unlab:
-        risk_j = calc_risk(j, m, C, y, lab, unlab, gamma2)
+        risk_j = calc_risk(j, m, C, y, lab, unlab, m_probs, gamma2)
         heappush(risks, (risk_j, j))
 
     k_next_risk, k_next = heappop(risks)
@@ -315,6 +236,8 @@ def run_next2(m, C, y, lab, unlab, fid, ground_truth, gamma2):
 
 def calc_stats2(m, fid, gt_flipped, _print=False):
     stats = {}
+    if m.shape[1] == 1:
+        m = m.reshape(1,m.size)
     N = m.shape[1]
     m1 = np.where(m >= 0)[1]
     m2 = np.where(m < 0)[1]
@@ -338,14 +261,46 @@ def calc_stats2(m, fid, gt_flipped, _print=False):
 
     return error, stats
 
-def run_test_AL(X, v, w, labeled, unlabeled, fid, ground_truth, gt_flipped, tau, alpha, gamma2, iters=5, verbose=False):
+
+
+
+
+
+
+def run_test_AL_mod(X, v, w, fid, ground_truth, tag2=(0.01, 1.0, 0.00001), test_opts=(10, False)):
+    '''
+    Inputs:
+        X : (N x d) data matrix with the data points as columns
+        v : (N x N) eigenvectors (as columns)
+        w : (N, ) eigenvalues numpy array
+        fid : dictionary with fidelity indices (class_i, [i_1, i_2, ...])
+        tag2 : tuple (tau, alpha, gamma2). Default tau = 0.01, alpha = 1.0, gamma2 = 0.00001
+        test_opts : tuple (iters, verbose). Default (10, False)
+                (iters int, verbose bool)
+    '''
     N = len(ground_truth)
+    tau, alpha, gamma2 = tag2
+    iters, verbose = test_opts
+
+    # Prepare datastructures for labeling uses later
+    gt_flipped = {}
+    indices = np.array(list(range(N)))
+    labeled = set()
+    for k in fid.keys():
+        k_mask = indices[ground_truth ==k]
+        gt_flipped[k] = k_mask
+        labeled = labeled.union(set(fid[k]))
+    unlabeled = sorted(list(set(indices) - labeled))
+    labeled = sorted(list(labeled))
+
+
+    # Initial solution - find m and C, keep track of y
     B_diag = np.zeros(N)
     B_diag[labeled] = 1.
     B = sp.sparse.diags(B_diag, format='lil')
-
     m, C, y = calc_orig2(v, w, B, fid, tau, alpha, gamma2)
 
+    # Calculate the error of the classification resulting from this initial solution
     ERRS = []
     error, stats_obj = calc_stats2(m, fid, gt_flipped)
     ERRS.append((-1,error))
@@ -353,6 +308,7 @@ def run_test_AL(X, v, w, labeled, unlabeled, fid, ground_truth, gt_flipped, tau,
         print('Iter = 0')
         plot_iter(stats_obj, X, k_next=-1)
 
+    # structure to record the m vectors calculated at each iteration
     M = {}
     M[-1] = m
 
@@ -368,16 +324,40 @@ def run_test_AL(X, v, w, labeled, unlabeled, fid, ground_truth, gt_flipped, tau,
     return ERRS, M
 
 
-
-
-def run_test_rand(X, v, w, labeled, unlabeled, fid, ground_truth, gt_flipped, tau, alpha, gamma2, iters=10, verbose=False):
+def run_test_rand(X, v, w, fid, ground_truth, tag2=(0.01, 1.0, 0.00001), test_opts=(10, False)):
+    '''
+    Inputs:
+        X : (N x d) data matrix with the data points as columns
+        v : (N x N) eigenvectors (as columns)
+        w : (N, ) eigenvalues numpy array
+        fid : dictionary with fidelity indices (class_i, [i_1, i_2, ...])
+        tag2 : tuple (tau, alpha, gamma2). Default tau = 0.01, alpha = 1.0, gamma2 = 0.00001
+        test_opts : tuple (iters, verbose). Default (10, False)
+                (iters int, verbose bool)
+    '''
     N = len(ground_truth)
+    tau, alpha, gamma2 = tag2
+    iters, verbose = test_opts
+
+    # Prepare datastructures for labeling uses later
+    gt_flipped = {}
+    indices = np.array(list(range(N)))
+    labeled = set()
+    for k in fid.keys():
+        k_mask = indices[ground_truth ==k]
+        gt_flipped[k] = k_mask
+        labeled = labeled.union(set(fid[k]))
+    unlabeled = sorted(list(set(indices) - labeled))
+    labeled = sorted(list(labeled))
+
+
+    # Initial solution - find m and C, keep track of y
     B_diag = np.zeros(N)
     B_diag[labeled] = 1.
     B = sp.sparse.diags(B_diag, format='lil')
-
     m, C, y = calc_orig2(v, w, B, fid, tau, alpha, gamma2)
 
+    # Calculate the error of the classification resulting from this initial solution
     ERRS_rand = []
     error, stats_obj = calc_stats2(m, fid, gt_flipped)
     ERRS_rand.append((-1,error))
@@ -385,6 +365,7 @@ def run_test_rand(X, v, w, labeled, unlabeled, fid, ground_truth, gt_flipped, ta
         print('Iter = 0')
         plot_iter(stats_obj, X, k_next=-1)
 
+    # structure to record the m vectors calculated at each iteration
     M_rand = {}
     M_rand[-1] = m
 
@@ -412,58 +393,95 @@ def run_test_rand(X, v, w, labeled, unlabeled, fid, ground_truth, gt_flipped, ta
 
 
 
-    ################# KL Functions for 2 Moons #####
-    def run_next2_KL(m, C, y, lab, unlab, fid, ground_truth, gamma2, W):
-        m_probs = m.copy() # simple fix to get probabilities that respect the decision bdry
-        m_probs[m_probs >0] /= 2.*np.max(m_probs)
-        m_probs[m_probs <0] /= -2.*np.min(m_probs)
-        m_probs += 0.5
-        calc_class1_ind = np.where(m_probs >= 0.5)[0]
-        calc_class2_ind = np.where(m_probs < 0.5)[0]
-        tic = time.clock()
-        nz_entries
-        toc = time.clock()
-        print('Time for KL = %f' % (toc - tic))
+    ################# KL Functions #####
+def run_next2_KL(m, C, y, lab, unlab, fid, ground_truth, gamma2, W):
+    m_probs = m.copy() # simple fix to get probabilities that respect the decision bdry
+    m_probs[m_probs >0] /= 2.*np.max(m_probs)
+    m_probs[m_probs <0] /= -2.*np.min(m_probs)
+    m_probs += 0.5
+    calc_class1_ind = np.where(m_probs >= 0.5)[0]
+    calc_class2_ind = np.where(m_probs < 0.5)[0]
+    tic = time.clock()
+    nz_entries
+    toc = time.clock()
+    print('Time for KL = %f' % (toc - tic))
 
 
-        # Ask "the oracle" for k_next's value, known from ground truth in Ns
-        y_k_next = ground_truth[k_next]
-        fid[y_k_next].append(k_next)
+    # Ask "the oracle" for k_next's value, known from ground truth in Ns
+    y_k_next = ground_truth[k_next]
+    fid[y_k_next].append(k_next)
 
-        m_next, C_next = calc_next_C_and_m(m, C, y, labeled, k_next, y_k_next, gamma2)
-        y[k_next] = y_k_next
-        lab = np.array(list(lab)+ [k_next])
-        unlab.remove(k_next)
-
-
-        return k_next, m_next, C_next, y, lab, unlab, fid
+    m_next, C_next = calc_next_C_and_m(m, C, y, labeled, k_next, y_k_next, gamma2)
+    y[k_next] = y_k_next
+    lab = np.array(list(lab)+ [k_next])
+    unlab.remove(k_next)
 
 
-    def run_test_AL2_KL(X, v, w, W, labeled, unlabeled, fid, ground_truth, gt_flipped, tau, alpha, gamma2, iters=5, verbose=False):
-        N = len(ground_truth)
-        B_diag = np.zeros(N)
-        B_diag[labeled] = 1.
-        B = sp.sparse.diags(B_diag, format='lil')
+    return k_next, m_next, C_next, y, lab, unlab, fid
 
-        m, C, y = calc_orig2(v, w, B, fid, tau, alpha, gamma2)
 
-        ERRS = []
+def run_test_AL2_KL(X, v, w, W, labeled, unlabeled, fid, ground_truth, gt_flipped, tau, alpha, gamma2, iters=5, verbose=False):
+    N = len(ground_truth)
+    B_diag = np.zeros(N)
+    B_diag[labeled] = 1.
+    B = sp.sparse.diags(B_diag, format='lil')
+
+    m, C, y = calc_orig2(v, w, B, fid, tau, alpha, gamma2)
+
+    ERRS = []
+    error, stats_obj = calc_stats2(m, fid, gt_flipped)
+    ERRS.append((-1,error))
+    if verbose:
+        print('Iter = 0')
+        plot_iter(stats_obj, X, k_next=-1)
+
+    M = {}
+    M[-1] = m
+
+    # AL choices
+    for l in range(iters):
+        k, m, C, y, labeled, unlabeled, fid = run_next2_KL(m, C, y, labeled, unlabeled, fid, ground_truth, gamma2, W)
         error, stats_obj = calc_stats2(m, fid, gt_flipped)
-        ERRS.append((-1,error))
+        ERRS.append((k,error))
+        M[l] = m
         if verbose:
-            print('Iter = 0')
-            plot_iter(stats_obj, X, k_next=-1)
+            print('Iter = %d' % (l + 1))
+            plot_iter(stats_obj, X, k_next=k)
+    return ERRS, M
 
-        M = {}
-        M[-1] = m
 
-        # AL choices
-        for l in range(iters):
-            k, m, C, y, labeled, unlabeled, fid = run_next2_KL(m, C, y, labeled, unlabeled, fid, ground_truth, gamma2, W)
-            error, stats_obj = calc_stats2(m, fid, gt_flipped)
-            ERRS.append((k,error))
-            M[l] = m
-            if verbose:
-                print('Iter = %d' % (l + 1))
-                plot_iter(stats_obj, X, k_next=k)
-        return ERRS, M
+
+
+
+################ OLD functions -- will delete soon
+
+
+def run_test_AL(X, v, w, labeled, unlabeled, fid, ground_truth, gt_flipped, tau, alpha, gamma2, iters=5, verbose=False):
+    print('WARNING : this is old function, dont use. Will be removing from util soon.')
+    N = len(ground_truth)
+    B_diag = np.zeros(N)
+    B_diag[labeled] = 1.
+    B = sp.sparse.diags(B_diag, format='lil')
+
+    m, C, y = calc_orig2(v, w, B, fid, tau, alpha, gamma2)
+
+    ERRS = []
+    error, stats_obj = calc_stats2(m, fid, gt_flipped)
+    ERRS.append((-1,error))
+    if verbose:
+        print('Iter = 0')
+        plot_iter(stats_obj, X, k_next=-1)
+
+    M = {}
+    M[-1] = m
+
+    # AL choices
+    for l in range(iters):
+        k, m, C, y, labeled, unlabeled, fid = run_next2(m, C, y, labeled, unlabeled, fid, ground_truth, gamma2)
+        error, stats_obj = calc_stats2(m, fid, gt_flipped)
+        ERRS.append((k,error))
+        M[l] = m
+        if verbose:
+            print('Iter = %d' % (l + 1))
+            plot_iter(stats_obj, X, k_next=k)
+    return ERRS, M
