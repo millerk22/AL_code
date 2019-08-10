@@ -267,7 +267,7 @@ def calc_stats2(m, fid, gt_flipped, _print=False):
 
 
 
-def run_test_AL_mod(X, v, w, fid, ground_truth, tag2=(0.01, 1.0, 0.00001), test_opts=(10, False)):
+def run_test_AL(X, v, w, fid, ground_truth, tag2=(0.01, 1.0, 0.00001), test_opts=(10, False)):
     '''
     Inputs:
         X : (N x d) data matrix with the data points as columns
@@ -441,43 +441,6 @@ def run_test_AL2_KL(X, v, w, W, labeled, unlabeled, fid, ground_truth, gt_flippe
     # AL choices
     for l in range(iters):
         k, m, C, y, labeled, unlabeled, fid = run_next2_KL(m, C, y, labeled, unlabeled, fid, ground_truth, gamma2, W)
-        error, stats_obj = calc_stats2(m, fid, gt_flipped)
-        ERRS.append((k,error))
-        M[l] = m
-        if verbose:
-            print('Iter = %d' % (l + 1))
-            plot_iter(stats_obj, X, k_next=k)
-    return ERRS, M
-
-
-
-
-
-################ OLD functions -- will delete soon
-
-
-def run_test_AL(X, v, w, labeled, unlabeled, fid, ground_truth, gt_flipped, tau, alpha, gamma2, iters=5, verbose=False):
-    print('WARNING : this is old function, dont use. Will be removing from util soon.')
-    N = len(ground_truth)
-    B_diag = np.zeros(N)
-    B_diag[labeled] = 1.
-    B = sp.sparse.diags(B_diag, format='lil')
-
-    m, C, y = calc_orig2(v, w, B, fid, tau, alpha, gamma2)
-
-    ERRS = []
-    error, stats_obj = calc_stats2(m, fid, gt_flipped)
-    ERRS.append((-1,error))
-    if verbose:
-        print('Iter = 0')
-        plot_iter(stats_obj, X, k_next=-1)
-
-    M = {}
-    M[-1] = m
-
-    # AL choices
-    for l in range(iters):
-        k, m, C, y, labeled, unlabeled, fid = run_next2(m, C, y, labeled, unlabeled, fid, ground_truth, gamma2)
         error, stats_obj = calc_stats2(m, fid, gt_flipped)
         ERRS.append((k,error))
         M[l] = m
