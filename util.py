@@ -107,7 +107,8 @@ def calc_next_C_and_m(m, C, y, lab, k, y_k, gamma2):
 
 # Transform the vector m into probabilities, while still respecting the threshold value currently at 0
 def get_probs(m):
-    m_probs = m.flatten() # simple fix to get probabilities that respect the decision bdry
+    m_probs = m.copy()
+    #m_probs = m.flatten() # simple fix to get probabilities that respect the decision bdry
     m_probs[np.where(m_probs >0)] /= 2.*np.max(m_probs)
     m_probs[np.where(m_probs <0)] /= -2.*np.min(m_probs)
     m_probs += 0.5
@@ -190,12 +191,12 @@ def calc_orig_new(v, w, B, fid, labeled, unlabeled, tau, alpha, gamma2):
     A_inv = sla.inv(C_ll)
     Block1 = C_all_l.dot(A_inv)
     C = C_tau - Block1.dot(C_all_l.T)
-    m = Block1.dot(y[labeled]).flatten()
+    m = Block1.dot(y[labeled]).reshape(1,N)
 
-    return m, C, y
+    return np.matrix(m), np.matrix(C), y
 
 
-def run_next(m, C, y, lab, unlab, fid, ground_truth, gamma2):
+def run_next(m, C, y, lab, unlab, fid, ground_truth, gamma2, verbose=False):
     tic = time.clock()
     risks = []
     m_probs = get_probs(m)
@@ -205,7 +206,8 @@ def run_next(m, C, y, lab, unlab, fid, ground_truth, gamma2):
 
     k_next_risk, k_next = heappop(risks)
     toc = time.clock()
-    print('Time for EEM = %f' % (toc - tic))
+    if verbose:
+        print('Time for EEM = %f' % (toc - tic))
 
     # Ask "the oracle" for k_next's value, known from ground truth in Ns
     y_k_next = ground_truth[k_next]
@@ -257,7 +259,7 @@ def calc_stats(m, fid, gt_flipped, _print=False):
 
 
 
-def run_test_AL(X, v, w, fid, ground_truth, tag2=(0.01, 1.0, 0.00001), test_opts=(10, False)):
+def run_test_AL(X, v, w, fid, ground_truth, tag2=(0.01, 1.0, 0.00001), test_opts=(10, False), calc_new=True):
     '''
     Inputs:
         X : (N x d) data matrix with the data points as columns
@@ -267,6 +269,8 @@ def run_test_AL(X, v, w, fid, ground_truth, tag2=(0.01, 1.0, 0.00001), test_opts
         tag2 : tuple (tau, alpha, gamma2). Default tau = 0.01, alpha = 1.0, gamma2 = 0.00001
         test_opts : tuple (iters, verbose). Default (10, False)
                 (iters int, verbose bool)
+        calc_new : bool, if True, will call calc_orig_new() to calculate m, C, y for the first iteration.
+            Default is True.
     '''
     N = len(ground_truth)
     tau, alpha, gamma2 = tag2
@@ -288,8 +292,18 @@ def run_test_AL(X, v, w, fid, ground_truth, tag2=(0.01, 1.0, 0.00001), test_opts
     B_diag = np.zeros(N)
     B_diag[labeled] = 1.
     B = sp.sparse.diags(B_diag, format='lil')
-    m, C, y = calc_orig(v, w, B, fid, tau, alpha, gamma2)
-    #m, C, y = calc_orig_new(v, w, B, fid, labeled, unlabeled, tau, alpha, gamma2) # error occurring with this?
+    if calc_new:
+        tic = time.clock()
+        m, C, y = calc_orig_new(v, w, B, fid, labeled, unlabeled, tau, alpha, gamma2)
+        toc = time.clock()
+        if verbose:
+            print('calc_orig_new took %f seconds' % (toc -tic))
+    else:
+        tic = time.clock()
+        m, C, y = calc_orig(v, w, B, fid, tau, alpha, gamma2)
+        toc = time.clock()
+        if verbose:
+            print('calc_orig (old) took %f seconds' % (toc -tic))
 
     # Calculate the error of the classification resulting from this initial solution
     ERRS = []
@@ -315,7 +329,7 @@ def run_test_AL(X, v, w, fid, ground_truth, tag2=(0.01, 1.0, 0.00001), test_opts
     return ERRS, M
 
 
-def run_test_rand(X, v, w, fid, ground_truth, tag2=(0.01, 1.0, 0.00001), test_opts=(10, False)):
+def run_test_rand(X, v, w, fid, ground_truth, tag2=(0.01, 1.0, 0.00001), test_opts=(10, False), calc_new=True):
     '''
     Inputs:
         X : (N x d) data matrix with the data points as columns
@@ -325,6 +339,8 @@ def run_test_rand(X, v, w, fid, ground_truth, tag2=(0.01, 1.0, 0.00001), test_op
         tag2 : tuple (tau, alpha, gamma2). Default tau = 0.01, alpha = 1.0, gamma2 = 0.00001
         test_opts : tuple (iters, verbose). Default (10, False)
                 (iters int, verbose bool)
+        calc_new : bool, if True, will call calc_orig_new() to calculate m, C, y for the first iteration.
+                Default is True.
     '''
     N = len(ground_truth)
     tau, alpha, gamma2 = tag2
@@ -346,8 +362,10 @@ def run_test_rand(X, v, w, fid, ground_truth, tag2=(0.01, 1.0, 0.00001), test_op
     B_diag = np.zeros(N)
     B_diag[labeled] = 1.
     B = sp.sparse.diags(B_diag, format='lil')
-    m, C, y = calc_orig(v, w, B, fid, tau, alpha, gamma2)
-    #m, C, y = calc_orig_new(v, w, B, fid, labeled, unlabeled, tau, alpha, gamma2) # error occurring with this?
+    if calc_new:
+        m, C, y = calc_orig_new(v, w, B, fid, labeled, unlabeled, tau, alpha, gamma2)
+    else:
+        m, C, y = calc_orig(v, w, B, fid, tau, alpha, gamma2)
 
     # Calculate the error of the classification resulting from this initial solution
     ERRS_rand = []
