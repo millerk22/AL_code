@@ -278,12 +278,13 @@ def Sigma_opt(C, unlabeled, gamma2):
 
 def run_next_VS(m, C, y, labeled, unlabeled, fid, ground_truth, gamma2, method='S', batch_size=5, verbose=False):
     k_to_add = []
+    C_next = C.copy()
     for i in range(batch_size):
         tic = time.clock()
         if method == 'V':
-            k_next = V_opt(C, unlabeled, gamma2)
+            k_next = V_opt(C_next, unlabeled, gamma2)
         elif method == 'S':
-            k_next = Sigma_opt(C, unlabeled, gamma2)
+            k_next = Sigma_opt(C_next, unlabeled, gamma2)
         else:
             raiseValueError('Parameter for "method" is not valid...')
         toc = time.clock()
@@ -294,16 +295,20 @@ def run_next_VS(m, C, y, labeled, unlabeled, fid, ground_truth, gamma2, method='
         unlabeled.remove(k_next)  # we are updating unlabeled here
 
         # calculate update of C -- the posterior of adding k
-        ck = C[k_next,:]
+        ck = C_next[k_next,:]
         ckk = ck[k_next]
-        C = C - (1./(gamma2 + ckk))*np.outer(ck,ck) # NOTE : directly changing C
+        C_next -= (1./(gamma2 + ckk))*np.outer(ck,ck)
 
 
 
     # Ask "the oracle" for values of the k in k_to_add value known from ground truth
     y_ks = [ground_truth[k] for k in k_to_add]
-    # Do BATCH calculation now that we've queried the oracle
+
+    # Do BATCH calculation now that we've queried the oracle, notice this is using the OLD C
+    # just had found it was a little bit faster. could just do (1/gamma2)*C_next.dot(y[labeled_new])
     m_next = calc_next_m_batch(m, C, y, labeled, k_to_add, y_ks, gamma2)
+
+    del m, C  # delete now that no longer need
 
     # update the observations vector y, labeled, and fid
     y[k_to_add] = y_ks
@@ -312,7 +317,7 @@ def run_next_VS(m, C, y, labeled, unlabeled, fid, ground_truth, gamma2, method='
         fid[ground_truth[k]].append(k)
 
 
-    return m_next, C, y, labeled, unlabeled, fid, k_to_add
+    return m_next, C_next, y, labeled, unlabeled, fid, k_to_add
 
 
 
@@ -320,10 +325,10 @@ def run_next_VS(m, C, y, labeled, unlabeled, fid, ground_truth, gamma2, method='
 def calc_stats(m, fid, gt_flipped, _print=False):
     stats = {}
 
-    m = m.reshape(1,m.size)
-    N = m.shape[1]
-    m1 = np.where(m >= 0)[1]
-    m2 = np.where(m < 0)[1]
+    #m = m.reshape(1m.size)
+    N = m.shape[0]
+    m1 = np.where(m >= 0)[0]
+    m2 = np.where(m < 0)[0]
 
 
     sup1 = fid[1]
