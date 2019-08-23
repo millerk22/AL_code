@@ -73,14 +73,12 @@ def generate_data_graphs(Ns, means, Covs, k_nn=5):
     return X, W
 
 
-def get_eig_Lnorm(W, return_L=False):
-    L_sym = csgraph.laplacian(W, normed=True)
+def get_eig_Lnorm(W, return_L=False, normed_=True):
+    L_sym = csgraph.laplacian(W, normed=normed_)
     [w, v] = sp.linalg.eigh(L_sym.toarray())
     if return_L:
-        return w, v, L_sym
+        return w, v, L_sym.toarray()
     return w, v
-
-
 
 ########################## Single Updates #######################
 
@@ -127,6 +125,7 @@ def calc_next_m_batch(m, C, y, lab, k_to_add, y_ks, gamma2):
     m_next -= (1./gamma2)*C_b.dot(C_bb_inv.dot(C_b[lab_new,:].T.dot(y_next[lab_new])))
     return m_next
 
+'''
 def calc_next_C_and_m_batch(m, C, y, lab, k_to_add, y_ks, gamma2):
     Cb = C[:,k_to_add]
     mat_inv = sla.inv(gamma2*np.eye(len(k_to_add)) + Cb[k_to_add,:])
@@ -140,6 +139,8 @@ def calc_next_C_and_m_batch(m, C, y, lab, k_to_add, y_ks, gamma2):
     m_batch = (1./gamma2)*C[:,lab_new].dot(y_next[lab_new])
 
     return m_batch, C
+'''
+
 
 def calc_next_m_batch_multi(m, C, y, lab, k_to_add, class_ind_ks, gamma2):
     C_b = C[:, k_to_add]
@@ -167,26 +168,34 @@ def calc_next_C_and_m_batch_multi(m, C, y, lab, k_to_add, class_ind_ks, gamma2):
     return m_batch, C, y_next, lab_new
 
 # Transform the vector m into probabilities, while still respecting the threshold value currently at 0
-def get_probs(m):
+def get_probs(m,sigmoid=True):
+    if sigmoid:
+        return 1./(1. + np.exp(-3.*m))
     m_probs = m.copy()
-    #m_probs = m.flatten() # simple fix to get probabilities that respect the decision bdry
+    # simple fix to get probabilities that respect the 0 threshold
     m_probs[np.where(m_probs >0)] /= 2.*np.max(m_probs)
     m_probs[np.where(m_probs <0)] /= -2.*np.min(m_probs)
     m_probs += 0.5
     return m_probs
 
+
 # Transform the matrix m into probabilities, while still respecting the threshold
-def get_probs_multi(m):
+def get_probs_multi(m, softmax=False):
+    if m.size == m.shape[0]:
+        return get_probs(m, softmax)
+
+    if softmax:
+        print('Trying softmax function...')
+        m_probs = np.exp(3.*m)
+        m_probs /= np.sum(m_probs, axis=1)
+        return m_probs
+
     m_probs = m.copy()
-    #m_probs = m.flatten() # simple fix to get probabilities that respect the decision bdry
     m_probs -= 0.5
     for j in range(m.shape[1]): # for each class vector, normalize to be probability in 0,1, respecting 0.5 threshold
         m_probs[np.where(m_probs[:,j] >0),j] /= 2.*np.max(m_probs[:,j])
         m_probs[np.where(m_probs[:,j] <0),j] /= -2.*np.min(m_probs[:,j])
     m_probs += 0.5
-
-
-
     return m_probs
 
 
@@ -195,10 +204,10 @@ def calc_risk(k, m, C, y, lab, unlab, m_probs, gamma2):
     m_at_k = m_probs[k]
     m_k_p1 = calc_next_m(m, C, y, lab, k, 1., gamma2)
     m_k_p1 = get_probs(m_k_p1)
-    risk = (1. - m_at_k)*np.sum([min(m_k_p1[i], 1.- m_k_p1[i]) for i in unlab])
+    risk = m_at_k*np.sum([min(m_k_p1[i], 1.- m_k_p1[i]) for i in unlab])
     m_k_m1 = calc_next_m(m, C, y, lab, k, -1., gamma2)
     m_k_m1 = get_probs(m_k_m1)
-    risk += m_at_k*np.sum([min(m_k_m1[i], 1.- m_k_m1[i]) for i in unlab])
+    risk += (1.-m_at_k)*np.sum([min(m_k_m1[i], 1.- m_k_m1[i]) for i in unlab])
     return risk
 
 def calc_risk_full(k, m, C, y, lab, unlab, m_probs, gamma2):
@@ -206,10 +215,10 @@ def calc_risk_full(k, m, C, y, lab, unlab, m_probs, gamma2):
     m_at_k = m_probs[k]
     m_k_p1 = calc_next_m(m, C, y, lab, k, 1., gamma2)
     m_k_p1 = get_probs(m_k_p1)
-    risk = (1. - m_at_k)*np.sum([min(m_k_p1[i], 1.- m_k_p1[i]) for i in range(N)])
+    risk = m_at_k*np.sum([min(m_k_p1[i], 1.- m_k_p1[i]) for i in range(N)])
     m_k_m1 = calc_next_m(m, C, y, lab, k, -1., gamma2)
     m_k_m1 = get_probs(m_k_m1)
-    risk += m_at_k*np.sum([min(m_k_m1[i], 1.- m_k_m1[i]) for i in range(N)])
+    risk += (1.-m_at_k)*np.sum([min(m_k_m1[i], 1.- m_k_m1[i]) for i in range(N)])
     return risk
 
 def plot_iter(stats, X, k_next=-1):
@@ -333,7 +342,31 @@ def plot_iter_multi(stats, X, fid, k_next=-1):
     plt.show()
     return
 
+def plot_iter(stats, X, k_next=-1):
+    corr1 = stats['corr1']
+    corr2 = stats['corr2']
+    sup1 = stats['sup1']
+    sup2 = stats['sup2']
+    incorr1 = stats['incorr1']
+    incorr2 = stats['incorr2']
+    if type(k_next) == type([1, 2]):
+        plt.scatter(X[np.ix_(k_next,[0])], X[np.ix_(k_next,[1])], marker= 's', c='y', alpha= 0.7, s=200) # plot the new points to be included
+        plt.title('Dataset with Label for %s added' % str(k_next))
+    elif k_next >= 0:
+        plt.scatter(X[k_next,0], X[k_next,1], marker= 's', c='y', alpha= 0.7, s=200) # plot the new points to be included
+        plt.title('Dataset with Label for %s added' % str(k_next))
+    elif k_next == -1:
+        plt.title('Dataset with Initial Labeling')
 
+    plt.scatter(X[corr1,0], X[corr1,1], marker='x', c='b', alpha=0.2)
+    plt.scatter(X[incorr1,0], X[incorr1,1], marker='x', c='r', alpha=0.2)
+    plt.scatter(X[corr2,0], X[corr2,1], marker='o', c='r',alpha=0.15)
+    plt.scatter(X[incorr2,0], X[incorr2,1], marker='o', c='b',alpha=0.15)
+    plt.scatter(X[sup1,0], X[sup1,1], marker='x', c='b', alpha=1.0)
+    plt.scatter(X[sup2,0], X[sup2,1], marker='o', c='r', alpha=1.0)
+    plt.axis('equal')
+    plt.show()
+    return
 
 
 def calc_orig_multi(v, w, fid, labeled, unlabeled, tau, alpha, gamma2):
@@ -352,7 +385,8 @@ def calc_orig_multi(v, w, fid, labeled, unlabeled, tau, alpha, gamma2):
             y[fid_c,c-ofs] = 1    # TODO: make it sparse
 
     N_prime = len(labeled)
-    w_inv = (tau ** (2 * alpha)) * np.power(w + tau**2., -alpha)     # diagonalization of C_t,e
+    #w_inv = (tau ** (2 * alpha)) * np.power(w + tau**2., -alpha)     # diagonalization of C_t,e
+    w_inv =  np.power(w + tau**2., -alpha)     # diagonalization of C_t,e
     C_tau = v.dot((v*w_inv).T)
     C_ll = C_tau[np.ix_(labeled, labeled)]
     C_all_l = C_tau[:,labeled]
@@ -390,7 +424,7 @@ def run_next_EEM(m, C, y, lab, unlab, fid, ground_truth, gamma2, verbose=False, 
 
     m_next, C_next = calc_next_C_and_m(m, C, y, lab, k_next, y_k_next, gamma2)
     y[k_next] = y_k_next
-    lab = np.array(list(lab)+ [k_next])
+    lab.append(k_next)
     unlab.remove(k_next)
 
 
@@ -403,7 +437,7 @@ def V_opt(C, unlabeled, gamma2):
     return k_max
 
 def Sigma_opt(C, unlabeled, gamma2):
-    sums = np.sum(C[unlabeled,:], axis=1)
+    sums = np.sum(C[np.ix_(unlabeled,unlabeled)], axis=1)
     sums = np.asarray(sums).flatten()**2.
     s_opt = sums/(gamma2 + np.diag(C)[unlabeled])
     k_max = unlabeled[np.argmax(s_opt)]
@@ -592,7 +626,7 @@ def run_test_rand_multi(X, v, w, fid, ground_truth, tag2=(0.01, 1.0, 0.01), test
     M = {}
     M[-1] = m
 
-    # rand choices - done all at once
+    # rand choices - show each or all at once
     if show_all_iters:
         for l in range(iters):
             k_next = np.random.choice(unlabeled,1)[0]
@@ -675,22 +709,29 @@ def run_test_AL(X, v, w, fid, ground_truth, tag2=(0.01, 1.0, 0.01), test_opts=(1
     unlabeled = sorted(list(set(indices) - labeled))
     labeled = sorted(list(labeled))
 
+    org_indices = list(np.where(ground_truth == -1)[0])
+    org_indices.extend(list(np.where(ground_truth == 1)[0]))
 
     # Initial solution - find m and C, keep track of y
-    B = 0
     tic = time.clock()
-    m, C, y = calc_orig(v, w, B, fid, labeled, unlabeled, tau, alpha, gamma2)
+    m, C, y = calc_orig_multi(v, w, fid, labeled, unlabeled, tau, alpha, gamma2)
     toc = time.clock()
     if verbose:
-        print('calc_orig took %f seconds' % (toc -tic))
+        print('calc_orig_multi took %f seconds' % (toc -tic))
+
+
 
     # Calculate the error of the classification resulting from this initial solution
     ERRS = []
-    error, stats_obj = calc_stats(m, fid, gt_flipped)
+    error, stats_obj = calc_stats_multi(m, fid, gt_flipped)
     ERRS.append((-1,error))
     if verbose:
         print('Iter = 0')
-        plot_iter(stats_obj, X, k_next=-1)
+        if -1 in fid.keys():
+            plot_iter(stats_obj, X, k_next=-1)
+        else:
+            plot_iter_multi(stats_obj, X, fid, k_next=-1)
+            plot_risk_smoothness_and_m(X, C, m, y, labeled, unlabeled, org_indices, gamma2)
 
     # structure to record the m vectors calculated at each iteration
     M = {}
@@ -699,10 +740,68 @@ def run_test_AL(X, v, w, fid, ground_truth, tag2=(0.01, 1.0, 0.01), test_opts=(1
     # AL choices
     for l in range(iters):
         k, m, C, y, labeled, unlabeled, fid = run_next_EEM(m, C, y, labeled, unlabeled, fid, ground_truth, gamma2)
-        error, stats_obj = calc_stats(m, fid, gt_flipped)
+
+        error, stats_obj = calc_stats_multi(m, fid, gt_flipped)
         ERRS.append((k,error))
         M[l] = m
         if verbose:
             print('Iter = %d' % (l + 1))
-            plot_iter(stats_obj, X, k_next=k)
+            if -1 in fid.keys():
+                plot_iter(stats_obj, X, k_next=k)
+            else:
+                plot_iter_multi(stats_obj, X, fid, k_next=k)
+            plot_risk_smoothness_and_m(X, C, m, y, labeled, unlabeled, org_indices, gamma2)
     return ERRS, M
+
+
+
+def plot_risk_smoothness(X, C, m, y, labeled, unlabeled, gamma2):
+    N = X.shape[0]
+    m_probs = get_probs_multi(m)
+    risks = [calc_risk(j, m, C, y, labeled, unlabeled, m_probs, gamma2) for j in range(N)]
+    #risks2 = [calc_risk_full(j, m, C, y, labeled, unlabeled, m_probs, gamma2) for j in range(N)]
+    val = (risks - min(risks))/(max(risks) - min(risks))
+    colors = [(x, 0.5,(1-x)) for x in val]
+    plt.scatter(X[:,0],X[:,1], c=colors)
+    plt.scatter(2,1.45,c=[(0,0.5,1)], label='low risk')
+    plt.scatter(-1,1.45, c= [(1,0.5,0)], label='high risk')
+    plt.legend()
+    plt.title('Heat map of EEM function on nodes of graph')
+    plt.show()
+    print('k_next = %d' % np.argmin(risks))
+    print('m[k_next] = %f' % m[np.argmin(risks)])
+    return
+
+def plot_risk_smoothness_and_m(X, C, m, y, labeled, unlabeled, org_indices, gamma2):
+    N = X.shape[0]
+    m_probs = get_probs_multi(m)
+    risks = [calc_risk(j, m, C, y, labeled, unlabeled, m_probs, gamma2) for j in range(N)]
+    #risks2 = [calc_risk_full(j, m, C, y, labeled, unlabeled, m_probs, gamma2) for j in range(N)]
+    val = (risks - min(risks))/(max(risks) - min(risks))
+    colors = [(x, 0.5,(1-x)) for x in val]
+    plt.figure(figsize=(12,6))
+    plt.subplot(1,2,1)
+    plt.scatter(X[:,0],X[:,1], c=colors)
+    plt.scatter(2,1.45,c=[(0,0.5,1)], label='low risk')
+    plt.scatter(-1,1.45, c= [(1,0.5,0)], label='high risk')
+    plt.legend()
+    plt.title('Heat map of EEM function on nodes of graph')
+    plt.subplot(1,2,2)
+    lin = [i for i in range(N)]
+    plt.scatter(lin, get_probs(m[org_indices]))
+    plt.plot(lin, N*[0.5], 'r--')
+    plt.title(r'$m$ probabilities')
+    plt.show()
+    return
+
+def plot_m(X, m):
+    N = X.shape[0]
+    val = (m - min(m))/(max(m) - min(m))
+    colors = [(x,(1-x),0.5) for x in val]
+    plt.scatter(X[:,0],X[:,1], c=colors)
+    plt.scatter(2,1.45,c=[(0,1,0.5)], label='most negative')
+    plt.scatter(-1,1.45, c= [(1,0,0.5)], label='most positive')
+    plt.legend()
+    plt.title('Heat map of mean m on nodes of graph')
+    plt.show()
+    return
